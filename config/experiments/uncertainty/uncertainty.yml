@@ -14,8 +14,9 @@ experiment:
       iterations: 5
       dropout: 0.4
     deep_ensemble:
+      method: increasing_seed
       iterations: 5
-      restart_from: gnn_training
+      restart_from: training
     bagged_ensemble:
       iterations: 5
       min_num_days: 3

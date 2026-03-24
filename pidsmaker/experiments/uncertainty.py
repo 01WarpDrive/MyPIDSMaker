@@ -1,3 +1,4 @@
+import copy
 import math
 import os
 import shutil
@@ -6,6 +7,8 @@ import numpy as np
 import torch.nn as nn
 import wandb
 from torch_geometric.nn import MessagePassing
+
+from pidsmaker.config import update_task_paths_to_restart
 
 
 def update_cfg_for_uncertainty_exp(
@@ -26,36 +29,30 @@ def update_cfg_for_uncertainty_exp(
             delta = 0
 
         if hyperparameter == "text_h_dim":
-            clear_files_from_feat_training(cfg)
-            if cfg.featurization.feat_training.emb_dim is not None:
-                cfg.featurization.feat_training.emb_dim += int(
-                    delta * cfg.featurization.feat_training.emb_dim
-                )
+            clear_files_from_featurization(cfg)
+            if cfg.featurization.emb_dim is not None:
+                cfg.featurization.emb_dim += int(delta * cfg.featurization.emb_dim)
         else:
-            clear_files_from_gnn_training(cfg)
+            clear_files_from_training(cfg)
             if hyperparameter == "lr":
-                cfg.detection.gnn_training.lr += delta * cfg.detection.gnn_training.lr
+                cfg.training.lr += delta * cfg.training.lr
             elif hyperparameter == "num_epochs":
-                cfg.detection.gnn_training.num_epochs += int(
-                    delta * cfg.detection.gnn_training.num_epochs
-                )
+                cfg.training.num_epochs += int(delta * cfg.training.num_epochs)
             elif hyperparameter == "gnn_h_dim":
-                cfg.detection.gnn_training.node_hid_dim += int(
-                    delta * cfg.detection.gnn_training.node_hid_dim
-                )
+                cfg.training.node_hid_dim += int(delta * cfg.training.node_hid_dim)
             else:
                 raise ValueError(f"Invalid hyperparameter {hyperparameter}")
 
     elif method == "mc_dropout":
-        clear_files_from_gnn_training(cfg)
+        clear_files_from_training(cfg)
         cfg._is_running_mc_dropout = True
 
     elif method == "deep_ensemble":
         restart_from = cfg.experiment.uncertainty.deep_ensemble.restart_from
-        if restart_from == "feat_training":
-            clear_files_from_feat_training(cfg)
-        elif restart_from == "gnn_training":
-            clear_files_from_gnn_training(cfg)
+        if restart_from == "featurization":
+            clear_files_from_featurization(cfg)
+        elif restart_from == "training":
+            clear_files_from_training(cfg)
         else:
             raise ValueError(f"Unsupported 'restart from' value: {restart_from}")
 
@@ -63,34 +60,62 @@ def update_cfg_for_uncertainty_exp(
         # Here, force_restart will be at the beninning so no need to rm files
         min_num_days = cfg.experiment.uncertainty.bagged_ensemble.min_num_days
         num_days = min_num_days + index - 1
-        available_train_days = sorted(cfg.dataset.train_files + cfg.dataset.unused_files)
-        days = available_train_days[:num_days]
-        cfg.dataset.train_files = days
+        available_train_days = sorted(cfg.dataset.train_dates + cfg.dataset.unused_dates)
+        cfg.dataset.train_dates = available_train_days[:num_days]
 
     return cfg
 
 
+def prepare_for_deep_ensemble(cfg, iteration):
+    """Update tasks to restart based on the deep ensemble method used"""
+    method = cfg.experiment.uncertainty.deep_ensemble.method
+
+    if method == "same_seed":
+        subtask_concat_value = {
+            "subtask": cfg.experiment.uncertainty.deep_ensemble.restart_from,
+            "concat_value": str(iteration),
+        }
+
+    elif method == "increasing_seed":
+        restart_from = cfg.experiment.uncertainty.deep_ensemble.restart_from
+        cfg = copy.deepcopy(cfg)
+        if restart_from == "featurization":
+            cfg.featurization.seed += iteration
+        elif restart_from == "training":
+            cfg.training.seed += iteration
+        else:
+            raise ValueError(f"Invalid `restart_from` value")
+
+        subtask_concat_value = None
+
+    else:
+        raise ValueError(f"Invalid deep ensemble method `{method}`")
+
+    should_restart = update_task_paths_to_restart(cfg, subtask_concat_value=subtask_concat_value)
+    return should_restart, cfg
+
+
 # Utils
-def clear_files_from_gnn_training(cfg):
-    """Removes task paths to avoid old artifacts + consequently force restarts from gnn_training"""
-    paths = [cfg.detection.gnn_training._task_path, cfg.detection.evaluation._task_path]
+def clear_files_from_training(cfg):
+    """Removes task paths to avoid old artifacts + consequently force restarts from training"""
+    paths = [cfg.training._task_path, cfg.evaluation._task_path]
 
     for path in paths:
         shutil.rmtree(path, ignore_errors=True)
         os.makedirs(path)
 
 
-def clear_files_from_feat_training(cfg):
+def clear_files_from_featurization(cfg):
     paths = [
-        cfg.featurization.feat_training._task_path,
-        cfg.featurization.feat_inference._task_path,
+        cfg.featurization._task_path,
+        cfg.feat_inference._task_path,
     ]
 
     for path in paths:
         shutil.rmtree(path, ignore_errors=True)
         os.makedirs(path)
 
-    clear_files_from_gnn_training(cfg)
+    clear_files_from_training(cfg)
 
 
 def include_metric_in_stats(value):

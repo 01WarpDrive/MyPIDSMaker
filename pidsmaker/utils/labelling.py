@@ -21,14 +21,12 @@ def get_ground_truth(cfg):
                 ground_truth_paths[int(node_id)] = node_labels
                 uuid_to_node_id[node_uuid] = str(node_id)
 
-    mimicry_edge_num = cfg.preprocessing.build_graphs.mimicry_edge_num
+    mimicry_edge_num = cfg.construction.mimicry_edge_num
     if mimicry_edge_num is not None and mimicry_edge_num > 0:
         num_GPs = len(ground_truth_nids)
         for file in cfg.dataset.ground_truth_relative_path:
             file_name = file.split("/")[-1]
-            with open(
-                os.path.join(cfg.preprocessing.build_graphs._mimicry_dir, file_name), "r"
-            ) as f:
+            with open(os.path.join(cfg.construction._mimicry_dir, file_name), "r") as f:
                 reader = csv.reader(f)
                 for row in reader:
                     node_uuid, node_labels, _ = row[0], row[1], row[2]
@@ -65,12 +63,10 @@ def get_GP_of_each_attack(cfg):
                 node_id = uuid2nids[node_uuid]
                 attack_to_nids[i]["nids"].add(int(node_id))
 
-        mimicry_edge_num = cfg.preprocessing.build_graphs.mimicry_edge_num
+        mimicry_edge_num = cfg.construction.mimicry_edge_num
         if mimicry_edge_num is not None and mimicry_edge_num > 0:
             num_mimicry_GPs = 0
-            with open(
-                os.path.join(cfg.preprocessing.build_graphs._mimicry_dir, path.split("/")[-1]), "r"
-            ) as f:
+            with open(os.path.join(cfg.construction._mimicry_dir, path.split("/")[-1]), "r") as f:
                 reader = csv.reader(f)
                 for row in reader:
                     num_mimicry_GPs += 1
@@ -132,11 +128,11 @@ def get_t2malicious_node(cfg) -> dict[list]:
                 node_id = uuid2nids[node_uuid]
                 ground_truth_nids.add(str(node_id))
 
-        mimicry_edge_num = cfg.preprocessing.build_graphs.mimicry_edge_num
+        mimicry_edge_num = cfg.construction.mimicry_edge_num
         if mimicry_edge_num is not None and mimicry_edge_num > 0:
             num_GPs = len(ground_truth_nids)
             with open(
-                os.path.join(cfg.preprocessing.build_graphs._mimicry_dir, attack.split("/")[-1]),
+                os.path.join(cfg.construction._mimicry_dir, attack.split("/")[-1]),
                 "r",
             ) as f:
                 reader = csv.reader(f)
@@ -164,7 +160,7 @@ def get_attack_to_mal_edges(cfg) -> dict[list]:
     cur, connect = init_database_connection(cfg)
     uuid2nids, nid2uuid = get_uuid2nids(cur)
 
-    malicious_edge_selection = cfg.detection.evaluation.edge_evaluation.malicious_edge_selection
+    malicious_edge_selection = cfg.evaluation.edge_evaluation.malicious_edge_selection
 
     attack_to_mal_edges = defaultdict(set)
     for i, (path, attack_to_time_window) in enumerate(

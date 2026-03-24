@@ -1,3 +1,15 @@
+"""General utility functions for PIDSMaker.
+
+Provides commonly used utilities including:
+- Timestamp conversion (nanoseconds ↔ datetime)
+- Hashing and string manipulation
+- Database connection handling
+- File I/O and path management
+- Logging and progress tracking (log, log_tqdm)
+- Statistical functions (mean, std, percentile)
+- Random seed setting for reproducibility
+"""
+
 import csv
 import hashlib
 import os
@@ -24,6 +36,14 @@ from pidsmaker.config import update_cfg_for_multi_dataset
 
 
 def stringtomd5(originstr):
+    """Convert string to MD5 hash (using SHA256).
+
+    Args:
+        originstr: String to hash
+
+    Returns:
+        str: Hexadecimal hash digest
+    """
     originstr = originstr.encode("utf-8")
     signaturemd5 = hashlib.sha256()
     signaturemd5.update(originstr)
@@ -103,23 +123,25 @@ def datetime_to_timestamp_US(date):
     timeStamp = timestamp
     return int(timeStamp)
 
+
 def OPTC_datetime_to_timestamp_US(date):
-    '''convert OPTC datetime string to timestamp in nanoseconds'''
-    date=date.replace('-04:00','')
-    if '.' in date:
-        date,ms=date.split('.')
+    """convert OPTC datetime string to timestamp in nanoseconds"""
+    date = date.replace("-04:00", "")
+    if "." in date:
+        date, ms = date.split(".")
     else:
-        ms=0
-    tz = pytz.timezone('Etc/GMT+4')
+        ms = 0
+    tz = pytz.timezone("Etc/GMT+4")
     timeArray = time.strptime(date, "%Y-%m-%dT%H:%M:%S")
     dt = datetime.fromtimestamp(mktime(timeArray))
     timestamp = tz.localize(dt)
-    timestamp=timestamp.timestamp()
-    timeStamp = timestamp*1000+int(ms)
+    timestamp = timestamp.timestamp()
+    timeStamp = timestamp * 1000 + int(ms)
     return int(timeStamp) * 1000000
 
+
 def init_database_connection(cfg):
-    if cfg.preprocessing.build_graphs.use_all_files:
+    if cfg.construction.use_all_files:
         database_name = cfg.dataset.database_all_file
     else:
         database_name = cfg.dataset.database
@@ -311,8 +333,20 @@ def get_all_files_from_folders(base_dir: str, folders: list[str]):
     paths.sort(key=lambda f: int("".join(filter(str.isdigit, f))))
     return paths
 
+
+def get_all_graphs_for_dates(base_dir: str, dates: list[str]):
+    return get_all_files_from_folders(base_dir, [f"graph_{date}" for date in dates])
+
+
+def load_graphs_for_dates(base_dir: str, dates: list[str]):
+    """Loads all graph snapshots for a given list of dates."""
+    return [
+        torch.load(path) for date in dates for path in get_all_graphs_for_dates(base_dir, [date])
+    ]
+
+
 def get_all_filelist(filepath):
-    '''get all file paths under the given filepath recursively'''
+    """get all file paths under the given filepath recursively"""
     file_paths = []
     for root, dirs, files in os.walk(filepath):
         for file in files:
@@ -320,12 +354,6 @@ def get_all_filelist(filepath):
             abs_path = os.path.abspath(full_path)
             file_paths.append(abs_path)
     return file_paths
-
-def load_graphs_for_days(base_dir, days):
-    """Loads all graph snapshots for a given list of days."""
-    return [
-        torch.load(path) for day in days for path in get_all_files_from_folders(base_dir, [day])
-    ]
 
 
 def listdir_sorted(path: str):
@@ -410,7 +438,7 @@ def get_device(cfg):
 
 
 def get_node_to_path_and_type(cfg):
-    out_path = cfg.preprocessing.build_graphs._node_id_to_path
+    out_path = cfg.construction._node_id_to_path
     out_file = os.path.join(out_path, "node_to_paths.pkl")
 
     if not os.path.exists(out_file):
@@ -467,9 +495,9 @@ def copy_directory(src_path, dest_path):
 
 def get_split_to_files(cfg, base_dir):
     return {
-        "train": get_all_files_from_folders(base_dir, cfg.dataset.train_files),
-        "val": get_all_files_from_folders(base_dir, cfg.dataset.val_files),
-        "test": get_all_files_from_folders(base_dir, cfg.dataset.test_files),
+        "train": get_all_graphs_for_dates(base_dir, cfg.dataset.train_dates),
+        "val": get_all_graphs_for_dates(base_dir, cfg.dataset.val_dates),
+        "test": get_all_graphs_for_dates(base_dir, cfg.dataset.test_dates),
     }
 
 
@@ -487,9 +515,7 @@ def gen_relation_onehot(rel2id):
 
 def get_indexid2msg(cfg, gather_multi_dataset=False):
     def load_file(cfg):
-        indexid2msg_file = os.path.join(
-            cfg.preprocessing.build_graphs._dicts_dir, "indexid2msg.pkl"
-        )
+        indexid2msg_file = os.path.join(cfg.construction._dicts_dir, "indexid2msg.pkl")
         indexid2msg = torch.load(indexid2msg_file)
         return indexid2msg
 
@@ -518,12 +544,12 @@ def get_indexid2msg(cfg, gather_multi_dataset=False):
 
 def get_split2nodes(cfg, gather_multi_dataset=False):
     def load_file(cfg):
-        path = os.path.join(cfg.preprocessing.build_graphs._dicts_dir, "split2nodes.pkl")
+        path = os.path.join(cfg.construction._dicts_dir, "split2nodes.pkl")
         split2nodes = torch.load(path)
         return split2nodes
 
     multi_datasets = get_multi_datasets(cfg)
-    use_multi_dataset = "none" not in cfg.preprocessing.build_graphs.multi_dataset
+    use_multi_dataset = "none" not in cfg.construction.multi_dataset
 
     if gather_multi_dataset and use_multi_dataset:
         all_split2nodes = defaultdict(set)
@@ -674,24 +700,23 @@ def log_dataset_stats(datasets):
             log_helper(label, dataset)
 
 
-def set_seed(cfg):
-    if cfg.detection.gnn_training.use_seed:
-        seed = 0
-        random.seed(seed)
-        np.random.seed(seed)
+def set_seed(cfg, seed=None):
+    seed = seed or cfg.training.seed
+    random.seed(seed)
+    np.random.seed(seed)
 
-        torch.manual_seed(seed)
-        torch.cuda.manual_seed_all(seed)
-        torch.backends.cudnn.deterministic = True
-        torch.backends.cudnn.benchmark = False
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
 
-    if cfg.detection.gnn_training.deterministic:
+    if cfg.training.deterministic:
         torch.use_deterministic_algorithms(True, warn_only=True)
 
 
 def get_multi_datasets(cfg):
     # The main dataset should be always the first one
-    multi_dataset = cfg.preprocessing.build_graphs.multi_dataset
+    multi_dataset = cfg.construction.multi_dataset
     multi_datasets = list(
         map(lambda x: x.strip(), multi_dataset.split("," if "," in multi_dataset else "-"))
     )

@@ -1,3 +1,17 @@
+"""Queue-based evaluation for PIDS systems (Kairos-style).
+
+This module implements queue-based attack investigation where anomalous edges
+are grouped into queues using IDF (Inverse Document Frequency) scoring of nodes.
+Supports backward/forward tracing from Points of Interest (POIs) to identify
+attack propagation paths.
+
+Key functions:
+- cal_idf_kairos: Calculate IDF scores for nodes across time windows
+- cal_anomaly_loss_kairos: Identify anomalous edges using loss thresholds
+- is_include_key_word: Filter out benign system nodes
+- cal_set_rel: Compute queue relationships based on shared high-IDF nodes
+"""
+
 import copy
 import math
 import os
@@ -14,7 +28,7 @@ from pidsmaker.detection.evaluation_methods.evaluation_utils import (
     compute_tw_labels,
 )
 from pidsmaker.utils.utils import (
-    get_all_files_from_folders,
+    get_all_graphs_for_dates,
     listdir_sorted,
     log,
     mean,
@@ -23,8 +37,17 @@ from pidsmaker.utils.utils import (
 )
 
 
-# Kairos code
 def cal_idf_kairos(graph_files):
+    """Calculate IDF (Inverse Document Frequency) scores for nodes across graph files.
+
+    IDF measures node rarity: high IDF = node appears in few time windows (more suspicious).
+
+    Args:
+        graph_files: List of paths to graph files
+
+    Returns:
+        tuple: (node_IDF dict mapping node labels to IDF scores, total file count)
+    """
     node_set = defaultdict(set)
     for f_path in tqdm(graph_files, desc="Calculating IDF"):
         g = torch.load(f_path)
@@ -44,6 +67,17 @@ def cal_idf_kairos(graph_files):
 
 
 def is_include_key_word_bak(s):
+    """Check if node label contains benign system keywords (legacy version).
+
+    This is an older version with slightly different keyword list than is_include_key_word().
+    Used for backward compatibility with older experiments.
+
+    Args:
+        s: Node label string
+
+    Returns:
+        bool: True if label contains any benign system keyword
+    """
     keywords = [
         ":",
         "null",
@@ -69,6 +103,17 @@ def is_include_key_word_bak(s):
 
 
 def is_include_key_word(s):
+    """Check if node label contains benign system keywords (current version).
+
+    Filters out common benign nodes (system files, null values, temp files) to reduce
+    false positives in queue-based investigation.
+
+    Args:
+        s: Node label string
+
+    Returns:
+        bool: True if label contains any benign system keyword
+    """
     keywords = [
         ":",
         "/dev/pts",
@@ -94,44 +139,73 @@ def is_include_key_word(s):
     return flag
 
 
-def cal_set_rel_bak(node_IDF, s1, s2, num_files):
+def cal_set_rel_bak(node_IDF, s1, s2, num_dates):
+    """Calculate queue relationship score between two node sets (legacy version).
+
+    Counts high-IDF nodes shared between two sets to determine if queues should be merged.
+
+    Args:
+        node_IDF: Dict mapping node labels to IDF scores
+        s1: First node set
+        s2: Second node set
+        num_dates: Total number of dates for IDF threshold calculation
+
+    Returns:
+        int: Count of shared high-IDF nodes (>90th percentile)
+    """
     new_s = (
         s1 & s2
     )  # used to find common nodes in two windows to check if they should be in the same queue
     count = 0
     for i in new_s:
         #     jdata=json.loads(i)
-        if is_include_key_word_bak(i) is not True:
+        if not is_include_key_word_bak(i):
             if i in node_IDF.keys():
                 IDF = node_IDF[i]
             else:
-                IDF = math.log(num_files / (1))
+                IDF = math.log(num_dates / (1))
 
             if (IDF) > math.log(
-                num_files * 0.9 / (1)
+                num_dates * 0.9 / (1)
             ):  # TODO: default value for kairos, but can be parametrized
                 log("node:", i, " IDF:", IDF)
                 count += 1
     return count
 
 
-def cal_set_rel(train_node_IDF, test_node_IDF, s1, s2, num_test_files, num_train_files):
+def cal_set_rel(train_node_IDF, test_node_IDF, s1, s2, num_test_dates, num_train_dates):
+    """Calculate queue relationship score using both train and test IDF scores.
+
+    Improved version that considers IDF from both training and test sets for better
+    anomaly detection. Queues are related if they share nodes with high combined IDF.
+
+    Args:
+        train_node_IDF: Training set IDF scores
+        test_node_IDF: Test set IDF scores
+        s1: First node set
+        s2: Second node set
+        num_test_dates: Number of test dates
+        num_train_dates: Number of training dates
+
+    Returns:
+        int: Count of shared high-IDF nodes (combined IDF > 5)
+    """
     IDF_train = train_node_IDF
     new_s = (
         s1 & s2
     )  # used to find common nodes in two windows to check if they should be in the same queue
     count = 0
     for i in new_s:
-        if is_include_key_word(i) is not True:
+        if not is_include_key_word(i):
             if i in test_node_IDF:
                 IDF_test = test_node_IDF[i]
             else:
-                IDF_test = math.log(num_test_files / (1))
+                IDF_test = math.log(num_test_dates / (1))
 
             if i in train_node_IDF:
                 IDF_train = train_node_IDF[i]
             else:
-                IDF_train = math.log(num_train_files / (1))
+                IDF_train = math.log(num_train_dates / (1))
 
             if (
                 IDF_test + IDF_train
@@ -142,6 +216,18 @@ def cal_set_rel(train_node_IDF, test_node_IDF, s1, s2, num_test_files, num_train
 
 
 def cal_anomaly_loss_kairos(loss_list, edge_list):
+    """Identify anomalous edges using statistical threshold on loss values.
+
+    Uses mean + 3*std threshold to classify edges as anomalous. Returns nodes
+    involved in anomalous edges and their cumulative loss.
+
+    Args:
+        loss_list: List of loss values for edges
+        edge_list: List of edge tuples (src, dst)
+
+    Returns:
+        tuple: (cumulative_loss, node_set, edge_set) for anomalous edges
+    """
     if len(loss_list) != len(edge_list):
         log("error!")
         return 0
@@ -172,7 +258,7 @@ def cal_anomaly_loss_kairos(loss_list, edge_list):
 
 
 def anomalous_queue_construction_kairos(
-    test_tw_path, train_node_IDF, test_node_IDF, num_train_files, num_test_files, cfg
+    test_tw_path, train_node_IDF, test_node_IDF, num_train_dates, num_test_dates, cfg
 ):
     # check if we use val set here
 
@@ -207,18 +293,18 @@ def anomalous_queue_construction_kairos(
         added_que_flag = False
         for hq in queues:
             for his_tw in hq:
-                if cfg.detection.evaluation.queue_evaluation.kairos_idf_queue.include_test_set_in_IDF:
+                if cfg.evaluation.queue_evaluation.kairos_idf_queue.include_test_set_in_IDF:
                     cal_re = cal_set_rel(
                         train_node_IDF,
                         test_node_IDF,
                         current_tw["nodeset"],
                         his_tw["nodeset"],
-                        num_test_files,
-                        num_train_files,
+                        num_test_dates,
+                        num_train_dates,
                     )
                 else:
                     cal_re = cal_set_rel_bak(
-                        train_node_IDF, current_tw["nodeset"], his_tw["nodeset"], num_train_files
+                        train_node_IDF, current_tw["nodeset"], his_tw["nodeset"], num_train_dates
                     )
                 if cal_re != 0 and current_tw["name"] != his_tw["name"]:
                     hq.append(copy.deepcopy(current_tw))
@@ -249,22 +335,22 @@ def anomalous_queue_construction_kairos(
 
 def create_queues_kairos(cfg):
     # In kairos, IDF is computed only on benign edges (train set)
-    base_dir = cfg.preprocessing.transformation._graphs_dir
-    train_feat_files = get_all_files_from_folders(base_dir, cfg.dataset.train_files)
-    test_feat_files = get_all_files_from_folders(base_dir, cfg.dataset.test_files)
+    base_dir = cfg.transformation._graphs_dir
+    train_feat_files = get_all_graphs_for_dates(base_dir, cfg.dataset.train_dates)
+    test_feat_files = get_all_graphs_for_dates(base_dir, cfg.dataset.test_dates)
 
-    train_node_IDF, num_train_files = cal_idf_kairos(train_feat_files)
-    test_node_IDF, num_test_files = cal_idf_kairos(test_feat_files)
+    train_node_IDF, num_train_dates = cal_idf_kairos(train_feat_files)
+    test_node_IDF, num_test_dates = cal_idf_kairos(test_feat_files)
 
-    test_losses_dir = os.path.join(cfg.detection.gnn_training._edge_losses_dir, "test")
+    test_losses_dir = os.path.join(cfg.training._edge_losses_dir, "test")
     for model_epoch_dir in tqdm(listdir_sorted(test_losses_dir), desc="Building queues"):
         log(f"\nEvaluation of model {model_epoch_dir}...")
         test_tw_path = os.path.join(test_losses_dir, model_epoch_dir)
         queues = anomalous_queue_construction_kairos(
-            test_tw_path, train_node_IDF, test_node_IDF, num_train_files, num_test_files, cfg
+            test_tw_path, train_node_IDF, test_node_IDF, num_train_dates, num_test_dates, cfg
         )
 
-        out_dir = cfg.detection.evaluation.queue_evaluation._queues_dir
+        out_dir = cfg.evaluation.queue_evaluation._queues_dir
         os.makedirs(out_dir, exist_ok=True)
         torch.save(queues, os.path.join(out_dir, f"{model_epoch_dir}_queues.pkl"))
 
@@ -424,7 +510,7 @@ def anomalous_queue_construction_provnet(
 
 def train_lof_model(cfg):
     node2vec_train_val_path = os.path.join(
-        cfg.featurization.feat_training.alacarte._vec_graphs_dir, "nodelabel2vec_val"
+        cfg.featurization.alacarte._vec_graphs_dir, "nodelabel2vec_val"
     )
     labels_and_embeddings = torch.load(node2vec_train_val_path)
 
@@ -437,7 +523,7 @@ def train_lof_model(cfg):
             embeddings.append(labels_and_embeddings[label])
 
     clf = LocalOutlierFactor(novelty=True, n_neighbors=30).fit(embeddings)
-    torch.save(clf, os.path.join(cfg.detection.evaluation._task_path, "trained_lof.pkl"))
+    torch.save(clf, os.path.join(cfg.evaluation._task_path, "trained_lof.pkl"))
     return clf
 
 
@@ -457,11 +543,9 @@ def ground_truth_label(test_tw_path, cfg):
 
 
 def create_queues_provnet(cfg):
-    node2vec_path = os.path.join(
-        cfg.featurization.feat_training.alacarte._vec_graphs_dir, "nodelabel2vec"
-    )
+    node2vec_path = os.path.join(cfg.featurization.alacarte._vec_graphs_dir, "nodelabel2vec")
     node2vec_train_val_path = os.path.join(
-        cfg.featurization.feat_training.alacarte._vec_graphs_dir, "nodelabel2vec_val"
+        cfg.featurization.alacarte._vec_graphs_dir, "nodelabel2vec_val"
     )
 
     node2vec = torch.load(node2vec_path)
@@ -469,8 +553,8 @@ def create_queues_provnet(cfg):
 
     lof_model = train_lof_model(cfg)
 
-    test_losses_dir = os.path.join(cfg.detection.gnn_training._edge_losses_dir, "test")
-    val_losses_dir = os.path.join(cfg.detection.gnn_training._edge_losses_dir, "val")
+    test_losses_dir = os.path.join(cfg.training._edge_losses_dir, "test")
+    val_losses_dir = os.path.join(cfg.training._edge_losses_dir, "val")
 
     for model_epoch_dir in listdir_sorted(test_losses_dir):
         log(f"\nEvaluation of model {model_epoch_dir}...")
@@ -489,14 +573,14 @@ def create_queues_provnet(cfg):
             val_thr=val_thr,
         )
 
-        out_dir = cfg.detection.evaluation.queue_evaluation._queues_dir
+        out_dir = cfg.evaluation.queue_evaluation._queues_dir
         os.makedirs(out_dir, exist_ok=True)
         torch.save(queues, os.path.join(out_dir, f"{model_epoch_dir}_queues.pkl"))
 
 
 def predict_queues(cfg):
     # Evaluating the testing set
-    test_losses_dir = os.path.join(cfg.detection.gnn_training._edge_losses_dir, "test")
+    test_losses_dir = os.path.join(cfg.training._edge_losses_dir, "test")
 
     best_precision, best_stats = 0.0, None
     for model_epoch_dir in listdir_sorted(test_losses_dir):
@@ -508,7 +592,7 @@ def predict_queues(cfg):
 
         queues = torch.load(
             os.path.join(
-                cfg.detection.evaluation.queue_evaluation._queues_dir,
+                cfg.evaluation.queue_evaluation._queues_dir,
                 f"{model_epoch_dir}_queues.pkl",
             )
         )
@@ -525,7 +609,7 @@ def predict_queues(cfg):
                     anomaly_score = (anomaly_score) * (hq["loss"] + 1)
             log(f"-> queue anomaly score: {anomaly_score:.2f} | {'ATTACK' if label else ''}")
 
-            if anomaly_score > cfg.detection.evaluation.queue_evaluation.queue_threshold:
+            if anomaly_score > cfg.evaluation.queue_evaluation.queue_threshold:
                 idx_list = []
                 for i in queue:
                     idx_list.append(i["index"])
@@ -535,7 +619,7 @@ def predict_queues(cfg):
                     pred_label[i] = 1
                 log(f"Anomaly score: {anomaly_score}")
 
-        out_dir = cfg.detection.evaluation.queue_evaluation._predicted_queues_dir
+        out_dir = cfg.evaluation.queue_evaluation._predicted_queues_dir
         os.makedirs(out_dir, exist_ok=True)
         torch.save(
             detected_queues, os.path.join(out_dir, f"{model_epoch_dir}_predicted_queues.pkl")
@@ -559,7 +643,7 @@ def predict_queues(cfg):
 
 
 def main(cfg):
-    method = cfg.detection.evaluation.queue_evaluation.used_method
+    method = cfg.evaluation.queue_evaluation.used_method
 
     if method == "kairos_idf_queue":
         create_queues_kairos(cfg)

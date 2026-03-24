@@ -1,3 +1,14 @@
+"""Training loop for PIDS models.
+
+Handles model training with:
+- Self-supervised pretraining with multiple objectives
+- Optional few-shot fine-tuning for attack detection
+- Gradient accumulation for large graphs
+- Early stopping with patience
+- Memory tracking (GPU and CPU)
+- Validation-based model selection
+"""
+
 import copy
 import tracemalloc
 from time import perf_counter as timer
@@ -6,19 +17,33 @@ import numpy as np
 import torch
 import wandb
 
-from pidsmaker.detection.graph_preprocessing import get_preprocessed_graphs
 from pidsmaker.factory import (
     build_model,
     optimizer_factory,
     optimizer_few_shot_factory,
 )
+from pidsmaker.tasks.batching import get_preprocessed_graphs
 from pidsmaker.utils.utils import get_device, log, log_start, log_tqdm, set_seed
 
 from . import inference_loop
 
 
 def main(cfg):
-    set_seed(cfg)
+    """Main training loop executing self-supervised pretraining and optional few-shot fine-tuning.
+
+    Training process:
+    1. Self-supervised pretraining on reconstruction/prediction objectives
+    2. Optional few-shot fine-tuning on labeled attack data
+    3. Validation-based model selection (best epoch or each epoch)
+    4. Early stopping with configurable patience
+
+    Args:
+        cfg: Configuration with training hyperparameters (epochs, lr, patience, etc.)
+
+    Returns:
+        float: Best validation score achieved during training
+    """
+    set_seed(cfg, seed=cfg.training.seed)
 
     log_start(__file__)
     device = get_device(cfg)
@@ -42,18 +67,18 @@ def main(cfg):
     )
     best_epoch_mode = run_evaluation == "best_epoch"
 
-    num_epochs = cfg.detection.gnn_training.num_epochs
+    num_epochs = cfg.training.num_epochs
     tot_loss = 0.0
     epoch_times = []
     peak_train_cpu_mem = 0
     peak_train_gpu_mem = 0
     test_stats = None
-    patience = cfg.detection.gnn_training.patience
+    patience = cfg.training.patience
     patience_counter = 0
     all_test_stats = []
     global_best_val_score = float("-inf")
-    use_few_shot = cfg.detection.gnn_training.decoder.use_few_shot
-    grad_acc = cfg.detection.gnn_training.grad_accumulation
+    use_few_shot = cfg.training.decoder.use_few_shot
+    grad_acc = cfg.training.grad_accumulation
 
     if use_few_shot:
         num_epochs += 1  # in few-shot, the first epoch is without ssl training
@@ -121,8 +146,8 @@ def main(cfg):
             model.to_fine_tuning(True)
             optimizer = optimizer_few_shot_factory(cfg, parameters=set(model.parameters()))
 
-            num_epochs_few_shot = cfg.detection.gnn_training.decoder.few_shot.num_epochs_few_shot
-            patience_few_shot = cfg.detection.gnn_training.decoder.few_shot.patience_few_shot
+            num_epochs_few_shot = cfg.training.decoder.few_shot.num_epochs_few_shot
+            patience_few_shot = cfg.training.decoder.few_shot.patience_few_shot
 
             for tuning_epoch in range(0, num_epochs_few_shot):
                 model.reset_state()
@@ -254,7 +279,16 @@ def main(cfg):
 
 
 def remove_attacks_if_needed(graph, cfg):
-    if not cfg.detection.gnn_training.decoder.few_shot.include_attacks_in_ssl_training:
+    """Remove attack edges from graph for self-supervised training if configured.
+
+    Args:
+        graph: Graph batch with labels in graph.y
+        cfg: Configuration with few_shot.include_attacks_in_ssl_training setting
+
+    Returns:
+        graph: Original graph or filtered graph without attacks (y=1)
+    """
+    if not cfg.training.decoder.few_shot.include_attacks_in_ssl_training:
         if 1 in graph.y:
             return graph.clone()[graph.y != 1]
     return graph

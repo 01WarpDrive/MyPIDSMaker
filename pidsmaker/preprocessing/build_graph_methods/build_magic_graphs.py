@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 import networkx as nx
 import torch
 
-from pidsmaker.config import get_darpa_tc_node_feats_from_cfg
+from pidsmaker.config import get_darpa_tc_node_feats_from_cfg, get_dates_from_cfg
 from pidsmaker.utils.dataset_utils import get_node_map, get_rel2id
 from pidsmaker.utils.utils import (
     datetime_to_ns_time_US,
@@ -17,7 +17,7 @@ from pidsmaker.utils.utils import (
 
 
 def get_node_list(cur, cfg):
-    use_hashed_label = cfg.preprocessing.build_graphs.use_hashed_label
+    use_hashed_label = cfg.construction.use_hashed_label
     node_label_features = get_darpa_tc_node_feats_from_cfg(cfg)
 
     uuid2idx = {}
@@ -115,19 +115,6 @@ def get_node_list(cur, cfg):
     return uuid2idx, uuid2type, uuid2name, hash2uuid
 
 
-def generate_timestamps(start_time, end_time, interval_minutes):
-    start = datetime.strptime(start_time, "%Y-%m-%d %H:%M:%S")
-    end = datetime.strptime(end_time, "%Y-%m-%d %H:%M:%S")
-
-    timestamps = []
-    current_time = start
-    while current_time <= end:
-        timestamps.append(current_time.strftime("%Y-%m-%d %H:%M:%S"))
-        current_time += timedelta(minutes=interval_minutes)
-    timestamps.append(end)
-    return timestamps
-
-
 def generate_graphs(cur, uuid2type, graph_out_dir, hash2uuid, cfg):
     rel2id = get_rel2id(cfg)
     ntype2id = get_node_map()
@@ -139,19 +126,11 @@ def generate_graphs(cur, uuid2type, graph_out_dir, hash2uuid, cfg):
             yield arr[i : i + batch_size]
 
     # In test mode, we ensure to get 1 TW in each set
-    if cfg._test_mode:
-        # Get the day number of the first day in each set
-        days = [
-            int(days[0].split("_")[-1])
-            for days in [cfg.dataset.train_files, cfg.dataset.val_files, cfg.dataset.test_files]
-        ]
-    else:
-        start, end = cfg.dataset.start_end_day_range
-        days = range(start, end)
+    dates = get_dates_from_cfg(cfg)
 
-    for day in days:
-        date_start = cfg.dataset.year_month + "-" + str(day) + " 00:00:00"
-        date_stop = cfg.dataset.year_month + "-" + str(day + 1) + " 00:00:00"
+    for date in dates:
+        date_start = f"{date} 00:00:00"
+        date_stop = f"{(datetime.strptime(date, '%Y-%m-%d') + timedelta(days=1)).strftime('%Y-%m-%d')} 00:00:00"
 
         timestamps = [date_start, date_stop]
         test_mode_set_done = False
@@ -200,7 +179,7 @@ def generate_graphs(cur, uuid2type, graph_out_dir, hash2uuid, cfg):
             start_time = events_list[0][-2]
             temp_list = []
             BATCH = 1024
-            window_size_in_sec = cfg.preprocessing.build_graphs.time_window_size * 60_000_000_000
+            window_size_in_sec = cfg.construction.time_window_size * 60_000_000_000
 
             last_batch = False
             for batch_edges in get_batches(events_list, BATCH):
@@ -252,7 +231,7 @@ def generate_graphs(cur, uuid2type, graph_out_dir, hash2uuid, cfg):
                                 type=include_edge_type[operation],
                             )
 
-                    date_dir = f"{graph_out_dir}/graph_{day}/"
+                    date_dir = f"{graph_out_dir}/graph_{date}/"
                     os.makedirs(date_dir, exist_ok=True)
                     graph_name = f"{date_dir}/{time_interval}"
 
@@ -274,10 +253,10 @@ def main(cfg):
     cur, connect = init_database_connection(cfg)
     uuid2idx, uuid2type, uuid2name, hash2uuid = get_node_list(cur=cur, cfg=cfg)
 
-    os.makedirs(cfg.preprocessing.build_graphs._magic_dir, exist_ok=True)
-    os.makedirs(cfg.preprocessing.build_graphs._magic_graphs_dir, exist_ok=True)
-    file_out_dir = cfg.preprocessing.build_graphs._magic_dir
-    graph_out_dir = cfg.preprocessing.build_graphs._magic_graphs_dir
+    os.makedirs(cfg.construction._magic_dir, exist_ok=True)
+    os.makedirs(cfg.construction._magic_graphs_dir, exist_ok=True)
+    file_out_dir = cfg.construction._magic_dir
+    graph_out_dir = cfg.construction._magic_graphs_dir
 
     with open(os.path.join(file_out_dir, "names.json"), "w", encoding="utf-8") as fw:
         json.dump(uuid2name, fw)
