@@ -96,7 +96,11 @@ def compute_indexid2msg(cfg):
     log(f"Number of process nodes: {len(records)}")
 
     for i in records:
-        attrs = {"type": "subject", "path": str(i[2]), "cmd_line": str(i[3])}
+        attrs = {
+            "type": "subject", 
+            "path": str(i[2]), 
+            "cmd_line": str(i[3])
+        }
         index_id = str(i[-1])
         node_type = attrs["type"]
         label_str = get_label_str_from_features(attrs, node_type)
@@ -113,7 +117,10 @@ def compute_indexid2msg(cfg):
     log(f"Number of file nodes: {len(records)}")
 
     for i in records:
-        attrs = {"type": "file", "path": str(i[2])}
+        attrs = {
+            "type": "file", 
+            "path": str(i[2])
+        }
         index_id = str(i[-1])
         node_type = attrs["type"]
         label_str = get_label_str_from_features(attrs, node_type)

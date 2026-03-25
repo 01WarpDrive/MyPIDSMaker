@@ -1,4 +1,13 @@
 # PIDSMaker框架研究笔记
+> 日志
+> 0324：复现ORTHRUS
+
+## 常用指令
+```
+./scripts/run.sh velox THEIA_E3 --training.encoder.dropout=0.3 --training.lr=0.001 --training.node_hid_dim=320 --training.node_out_dim=320 --training.num_epochs=12 --featurization.emb_dim=256
+
+./scripts/run.sh orthrus_non_snooped THEIA_E3 --training.encoder.dropout=0.3 --training.lr=0.001 --training.node_hid_dim=128 --training.node_out_dim=128 --training.num_epochs=12 --featurization.emb_dim=256 --construction.time_window_size=5
+```
 
 ## 配置
 1. 数据库创建方式(以optc_501.dump为例)：
@@ -13,5 +22,3 @@
 1. 运行`pidsmaker/main.py`，出现`Killed`:
     * 当前方法会全量加载数据集https://github.com/ubc-provenance/PIDSMaker/issues/9
     * 训练阶段内存开销可能大于32GB
-
-## 测试git push
